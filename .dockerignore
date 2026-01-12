@@ -1,0 +1,6 @@
+.git
+secrets/
+.env
+*.pyc
+__pycache__
+config.yaml.example
