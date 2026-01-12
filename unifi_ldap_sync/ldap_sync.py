@@ -1,9 +1,11 @@
-"""Синхронизация пользователей Unifi → OpenLDAP через ldap3."""
+"""Синхронизация пользователей UniFi → OpenLDAP через ldap3."""
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Set
 from ldap3 import Server, Connection, ALL, SUBTREE, MODIFY_REPLACE
 
+
 logger = logging.getLogger(__name__)
+
 
 class LDAPSync:
     def __init__(self, config: Dict[str, Any]):
@@ -48,7 +50,7 @@ class LDAPSync:
                 ['organizationalUnit'],
                 {
                     'ou': 'users',
-                    'description': 'Unifi Identity Users'
+                    'description': 'UniFi Access Users'
                 }
             )
             
@@ -63,8 +65,13 @@ class LDAPSync:
         finally:
             self.disconnect()
     
-    def get_existing_users(self) -> set:
-        """Получить UID существующих пользователей."""
+    def get_existing_users(self) -> Dict[str, str]:
+        """
+        Получить существующих пользователей из LDAP.
+        
+        Returns:
+            Dict[uid, dn]: Словарь {uid: dn} для всех пользователей
+        """
         try:
             self.conn.search(
                 f"ou=users,{self.base_dn}",
@@ -72,27 +79,68 @@ class LDAPSync:
                 search_scope=SUBTREE,
                 attributes=['uid']
             )
-            return {entry.uid.value for entry in self.conn.entries if hasattr(entry, 'uid')}
+            return {
+                entry.uid.value: entry.entry_dn 
+                for entry in self.conn.entries 
+                if hasattr(entry, 'uid')
+            }
         except Exception as e:
             logger.warning(f"Error getting existing users: {e}")
-            return set()
+            return {}
+    
+    def delete_obsolete_users(self, current_uids: Set[str], existing_users: Dict[str, str]):
+        """
+        Удалить пользователей из LDAP, которых нет в UniFi.
+        
+        Args:
+            current_uids: SetUID пользователей из UniFi
+            existing_users: Dict {uid: dn} пользователей из LDAP
+        """
+        obsolete_uids = set(existing_users.keys()) - current_uids
+        
+        if not obsolete_uids:
+            logger.info("No obsolete users to delete")
+            return
+        
+        deleted = 0
+        errors = 0
+        
+        for uid in obsolete_uids:
+            dn = existing_users[uid]
+            try:
+                self.conn.delete(dn)
+                if self.conn.result['result'] == 0:
+                    logger.info(f"🗑️  Deleted obsolete user: {uid}")
+                    deleted += 1
+                else:
+                    logger.warning(f"Delete failed {uid}: {self.conn.result}")
+                    errors += 1
+            except Exception as e:
+                logger.warning(f"Delete exception {uid}: {e}")
+                errors += 1
+        
+        logger.info(f"🗑️  Deleted {deleted} obsolete users ({errors} errors)")
     
     def sync_users(self, users: List[Dict[str, Any]]):
         """Синхронизация списка пользователей."""
         self.connect()
         try:
-            existing = self.get_existing_users()
+            existing_users = self.get_existing_users()
             added = 0
             updated = 0
             errors = 0
             
+            # Множество текущих UID из UniFi
+            current_uids = set()
+            
             for user in users:
+                # Для локального API структура другая - нет вложенного profile
                 uid = user['id']
-                profile = user.get('profile', {})
+                current_uids.add(uid)
                 
-                email = profile.get('email', f'user_{uid[:8]}@fallback.com')
-                firstname = profile.get('first_name', 'Unknown')
-                lastname = profile.get('last_name', 'User')
+                email = user.get('useremail', f'user_{uid[:8]}@fallback.com')
+                firstname = user.get('firstname', 'Unknown')
+                lastname = user.get('lastname', 'User')
                 cn = f"{firstname} {lastname}".strip()
                 
                 dn = f"uid={uid},ou=users,{self.base_dn}"
@@ -106,11 +154,11 @@ class LDAPSync:
                 }
                 
                 # Добавить телефон если есть
-                phone = f"{profile.get('area_code', '')}{profile.get('mobile_phone', '')}".strip()
+                phone = user.get('phone', '').strip()
                 if phone:
                     attrs['telephoneNumber'] = phone
                 
-                if uid in existing:
+                if uid in existing_users:
                     # Обновление существующего
                     try:
                         changes = {k: [(MODIFY_REPLACE, [v])] for k, v in attrs.items()}
@@ -143,6 +191,9 @@ class LDAPSync:
                     except Exception as e:
                         logger.warning(f"Add exception {email}: {e}")
                         errors += 1
+            
+            # Удаляем устаревших пользователей
+            self.delete_obsolete_users(current_uids, existing_users)
             
             logger.info(f"🔄 Sync completed: {added} added, {updated} updated, {errors} errors")
         finally:
