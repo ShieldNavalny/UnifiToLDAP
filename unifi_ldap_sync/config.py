@@ -1,26 +1,20 @@
 """Конфигурация из переменных окружения."""
 import os
 import logging
-from pathlib import Path
 from typing import Dict, Any
+
 
 def load_config() -> Dict[str, Any]:
     """Загрузка конфигурации из ENV."""
     
-    # Unifi Token из файла
-    token_file = os.getenv('UNIFI_TOKEN_FILE', '/run/secrets/unifi_token')
-    try:
-        unifi_token = Path(token_file).read_text().strip()
-    except FileNotFoundError:
-        raise ValueError(f"Unifi token file not found: {token_file}")
-    
     config = {
         'unifi': {
-            'base_url': f"https://{os.getenv('UNIFI_DOMAIN')}.ui.com",
-            'token': unifi_token,
+            'hostname': os.getenv('UNIFI_ACCESS_HOSTNAME'),
+            'port': int(os.getenv('UNIFI_ACCESS_PORT', '12445')),
+            'token': os.getenv('UNIFI_ACCESS_API_TOKEN'),
+            'verify_ssl': os.getenv('UNIFI_ACCESS_VERIFY_SSL', 'false').lower() == 'true',
         },
         'sync': {
-            'site_name': os.getenv('SITE_NAME', 'HQ'),
             'interval_seconds': int(os.getenv('SYNC_INTERVAL', '300')),
         },
         'ldap': {
@@ -37,10 +31,11 @@ def load_config() -> Dict[str, Any]:
     
     # Валидация обязательных полей
     required = [
+        config['unifi']['hostname'],
+        config['unifi']['token'],
         config['ldap']['base_dn'],
         config['ldap']['admin_dn'],
         config['ldap']['admin_password'],
-        config['unifi']['token'],
     ]
     
     if not all(required):
