@@ -1,0 +1,10 @@
+# dc=navalny,dc=com
+dn: dc=navalny,dc=com
+objectClass: dcObject
+objectClass: organization
+dc: navalny
+o: Navalny Org
+
+dn: ou=users,dc=navalny,dc=com
+objectClass: organizationalUnit
+ou: users
