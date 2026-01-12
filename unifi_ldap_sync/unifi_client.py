@@ -33,9 +33,9 @@ class UnifiClient:
                 logger.info(f"Found site '{site_name}': {site['id']}")
                 return site['id']
         raise ValueError(f"Site '{site_name}' not found")
-        
+    
     def get_all_access_policies(self, site_id: str) -> List[Dict[str, Any]]:
-        """Полная пагинация по pagination.total."""
+        """1. Получает ВСЕ access policies с пагинацией."""
         all_policies = []
         page_num = 1
         
@@ -45,6 +45,7 @@ class UnifiClient:
                 'page_size': 200,
                 'site_id': site_id,
             }
+            logger.debug(f"Fetching policies page {page_num}: {params}")
             
             response = self.session.get(
                 f"{self.base_url}/gw/permission/api/developer/access_policies",
@@ -58,27 +59,16 @@ class UnifiClient:
                 break
             
             policies = data.get('data', [])
-            pagination = data.get('pagination', {})
-            
-            # Логирование pagination
-            total = pagination.get('total', 0)
-            page_size = pagination.get('page_size', 0)
-            logger.info(f"Page {page_num}: {len(policies)} policies, "
-                    f"total={total}, page_size={page_size}")
-            
             if not policies:
                 break
-            
+                
             all_policies.extend(policies)
-            page_num += 1
+            logger.info(f"Policies page {page_num}: {len(policies)}")
             
-            # Если знаем total, можем оптимизировать
-            if total and len(all_policies) >= total:
-                break
+            page_num += 1
         
-        logger.info(f"Total policies fetched: {len(all_policies)} / {total}") # type: ignore
+        logger.info(f"Total policies for site {site_id}: {len(all_policies)}")
         return all_policies
-
     
     def extract_user_ids_from_policies(self, policies: List[Dict[str, Any]]) -> Set[str]:
         """2-3. Извлекает уникальные user IDs."""

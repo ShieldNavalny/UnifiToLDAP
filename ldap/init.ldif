@@ -1,10 +1,11 @@
-# dc=navalny,dc=com
-dn: dc=navalny,dc=com
+# Создать базовую структуру
+dn: ${LDAP_BASE_DN}
 objectClass: dcObject
 objectClass: organization
-dc: navalny
-o: Navalny Org
+dc: example
+o: Unifi LDAP Sync
 
-dn: ou=users,dc=navalny,dc=com
+dn: ou=users,${LDAP_BASE_DN}
 objectClass: organizationalUnit
 ou: users
+description: Unifi Identity users

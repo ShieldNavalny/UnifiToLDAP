@@ -1,1 +1,1 @@
-# UnifiToLDAP
+# unifi-ldap-sync

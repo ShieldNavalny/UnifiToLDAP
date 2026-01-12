@@ -2,15 +2,19 @@ FROM ubuntu:24.04
 
 # Установка пакетов
 RUN apt-get update && apt-get install -y \
-    python3 python3-pip \
+    python3 python3-pip python3-full \
     slapd ldap-utils \
     curl jq \
     && rm -rf /var/lib/apt/lists/*
 
-# Python зависимости
+# Создаем virtualenv для обхода externally-managed
 WORKDIR /app
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Python зависимости в venv
 COPY requirements.txt .
-RUN pip3 install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # OpenLDAP подготовка
 RUN mkdir -p /var/lib/ldap /var/run/slapd /etc/ldap/slapd.d && \
@@ -29,6 +33,5 @@ VOLUME ["/etc/ldap/slapd.d", "/var/lib/ldap"]
 
 EXPOSE 389 636
 
-# Правильный CMD array format
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-CMD ["python3", "/app/unifi_ldap_sync/main.py"]
+CMD ["python", "-m", "unifi_ldap_sync.main"]

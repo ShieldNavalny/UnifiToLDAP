@@ -1,5 +1,6 @@
 version: '3.8'
 
+
 services:
   unifi-ldap-sync:
     build: .
@@ -7,37 +8,38 @@ services:
     restart: unless-stopped
     
     ports:
-      - "389:389"
+      - "389:389"   # LDAP
+      - "636:636"   # LDAPS
     
     volumes:
       - ldap_data:/var/lib/ldap
       - ldap_config:/etc/ldap/slapd.d
-      - ./secrets:/run/secrets:ro
-      
+      - ./secrets:/run/secrets:ro  # Локальная папка secrets/
+    
     environment:
       - UNIFI_DOMAIN=${UNIFI_DOMAIN}
       - SITE_NAME=${SITE_NAME}
       - LDAP_BASE_DN=${LDAP_BASE_DN}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - LDAP_ROOTPW_FILE=/run/secrets/ldap_rootpw
     
-    secrets:
-      - ldap_rootpw
-      - unifi_token
-      
+#    secrets:
+#      - unifi_token
+#      - ldap_rootpw
+
+    
     healthcheck:
-      test: ["CMD-SHELL", "timeout 5 bash -c 'echo status | nc -w2 -u localhost 389' || exit 1"]
+      test: ["CMD-SHELL", "ldapsearch -x -H ldap://localhost -b '${LDAP_BASE_DN}' -s base || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 90s  # Больше времени на init
-
-secrets:
-  ldap_rootpw:
-    file: ./secrets/ldap_rootpw 
-  unifi_token:
-    file: ./secrets/unifi_token 
+      start_period: 60s
 
 volumes:
   ldap_data:
   ldap_config:
+
+#secrets:
+#  unifi_token:
+#    external: true # или .file /secrets для локального
+#  ldap_rootpw:
+#    external: true  # docker secret create ldap_rootpw secrets/ldap_rootpw.txt

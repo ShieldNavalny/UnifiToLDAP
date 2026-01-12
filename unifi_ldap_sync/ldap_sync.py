@@ -1,7 +1,5 @@
 """Синхронизация пользователей Unifi → OpenLDAP LDIF."""
 import logging
-import os
-import tempfile
 from pathlib import Path
 from typing import List, Dict, Any
 from datetime import datetime
@@ -17,16 +15,11 @@ def transform_users_to_ldif(users: List[Dict[str, Any]], base_dn: str) -> str:
     for user in users:
         profile = user.get('profile', {})
         
-        # Реальные имена полей из API
+        # ✅ Реальные имена полей из API
         email = profile.get('email')
         firstname = profile.get('first_name') or 'Unknown'
         lastname = profile.get('last_name') or 'User'
         full_name = f"{firstname} {lastname}".strip() or 'Unifi User'
-
-        # Если учетка службеная (Land) то она не нужна в LDAP        
-        if 'land' in lastname.lower():
-            logger.info(f"Skipped user (Land filter): {profile.get('email')} - {lastname}")
-            continue
         
         # Телефон
         area_code = profile.get('area_code', '')
@@ -69,23 +62,21 @@ def backup_ldap(config: Dict[str, Any]) -> Path:
     logger.info(f"Backup created: {backup_path}.ldif")
     return backup_path
 
-import tempfile
-
 def sync_users_to_ldap(users: List[Dict[str, Any]], config: Dict[str, Any]):
+    """Полная синхронизация: LDIF → slapadd."""
     base_dn = config['ldap']['base_dn']
+    ldif_path = Path(config['ldap']['ldif_path'])
     
+    # 1. Трансформация
     ldif_content = transform_users_to_ldif(users, base_dn)
-    logger.info(f"Transformed {len(users)} users")
+    logger.info(f"Transformed {len(users)} users to LDIF")
     
+    # 2. Бэкап
     backup_path = backup_ldap(config)
     
-    temp_ldif = Path('/tmp') / 'unifi-users.ldif'
+    # 3. Запись временного LDIF
+    temp_ldif = ldif_path.with_suffix('.tmp')
     temp_ldif.write_text(ldif_content)
-    
-    # Temp пароль
-    pw_file = tempfile.NamedTemporaryFile(mode='w', delete=False)
-    pw_file.write(open('/run/secrets/ldap_rootpw').read().strip())
-    pw_file.close()
     
     try:
         cmd = [
@@ -105,4 +96,3 @@ def sync_users_to_ldap(users: List[Dict[str, Any]], config: Dict[str, Any]):
     
     finally:
         temp_ldif.unlink(missing_ok=True)
-        os.unlink(pw_file.name)
