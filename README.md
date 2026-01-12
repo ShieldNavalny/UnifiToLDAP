@@ -138,7 +138,7 @@ def should_skip_user(self, user_data):
 - Graceful restart при смене токена
 
 **Автор**: ShieldNavalny  
-**Лицензия**: MIT  
+**Лицензия**: GNU Lesser General Public License v3.0  
 **Репозиторий**: [github.com/ShieldNavalny/UnifiToLDAP](https://github.com/ShieldNavalny/UnifiToLDAP)
 
 API reference можно найти в консоле Unifi или панели управления UID
