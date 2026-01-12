@@ -89,10 +89,14 @@ class LDAPSync:
             for user in users:
                 uid = user['id']
                 profile = user.get('profile', {})
-                
-                email = profile.get('email', f'user_{uid[:8]}@fallback.com')
-                firstname = profile.get('first_name', 'Unknown')
-                lastname = profile.get('last_name', 'User')
+
+                email = (
+                    user.get('user_email')
+                    or user.get('email')
+                )
+                firstname = user.get('first_name', 'Unknown')
+                lastname = user.get('last_name', 'User')
+
                 cn = f"{firstname} {lastname}".strip()
                 
                 dn = f"uid={uid},ou=users,{self.base_dn}"

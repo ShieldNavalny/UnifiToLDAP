@@ -40,10 +40,10 @@ class UniFiClient:
         Проверяет, нужно ли пропустить пользователя ибо это техперсонал.
         Фильтр: в фамилии есть слово 'land' как отдельное слово.
         """
-        lastname = user_data.get('lastname', '')
+        lastname = user_data.get('last_name', '')
         
         if 'land' in lastname.lower():
-            email = user_data.get('useremail', 'unknown')
+            email = user_data.get('email', 'unknown')
             logger.info(
                 f"Skipping technical account (lastname contains word 'land'): {email}"
             )
@@ -61,7 +61,7 @@ class UniFiClient:
             List[Dict]: Список пользователей с полями:
                 - id: UUID пользователя
                 - firstname, lastname: Имя
-                - useremail: Email
+                - email: Email
                 - employeenumber: идентификационный номер
                 - status: ACTIVE/DEACTIVATED/SUSPENDED
                 - nfccards: [{id, token}]
