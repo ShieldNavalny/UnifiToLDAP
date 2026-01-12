@@ -1,98 +1,149 @@
-"""Синхронизация пользователей Unifi → OpenLDAP LDIF."""
+"""Синхронизация пользователей Unifi → OpenLDAP через ldap3."""
 import logging
-from pathlib import Path
 from typing import List, Dict, Any
-from datetime import datetime
-import subprocess
-from .config import load_config
+from ldap3 import Server, Connection, ALL, SUBTREE, MODIFY_REPLACE
 
 logger = logging.getLogger(__name__)
 
-def transform_users_to_ldif(users: List[Dict[str, Any]], base_dn: str) -> str:
-    """Правильный парсинг snake_case полей."""
-    ldif_lines = []
+class LDAPSync:
+    def __init__(self, config: Dict[str, Any]):
+        self.host = config['ldap']['host']
+        self.port = config['ldap']['port']
+        self.admin_dn = config['ldap']['admin_dn']
+        self.admin_pw = config['ldap']['admin_password']
+        self.base_dn = config['ldap']['base_dn']
+        self.conn = None
     
-    for user in users:
-        profile = user.get('profile', {})
-        
-        # ✅ Реальные имена полей из API
-        email = profile.get('email')
-        firstname = profile.get('first_name') or 'Unknown'
-        lastname = profile.get('last_name') or 'User'
-        full_name = f"{firstname} {lastname}".strip() or 'Unifi User'
-        
-        # Телефон
-        area_code = profile.get('area_code', '')
-        mobile_phone = profile.get('mobile_phone', '')
-        phone = f"{area_code}{mobile_phone}".strip() if area_code or mobile_phone else ''
-        
-        alias = profile.get('alias') or full_name
-        
-        # DN по email или ID
-        if email:
-            dn = f"mail={email},{base_dn}"
-        else:
-            dn = f"uid={user['id'][:8]},{base_dn}"
-        
-        ldif = f"""dn: {dn}
-objectClass: inetOrgPerson
-cn: {full_name}
-sn: {lastname}
-givenName: {firstname}
-mail: {email or f"user_{user['id'][:8]}@fallback.com"}
-displayName: {alias}
-telephoneNumber: {phone}
-uid: {user['id']}
-description: Unifi status={user.get('status')} id={user['id']}
-"""
-        ldif_lines.append(ldif)
+    def connect(self):
+        """Подключение к LDAP серверу."""
+        server = Server(f'{self.host}:{self.port}', get_info=ALL)
+        self.conn = Connection(
+            server,
+            user=self.admin_dn,
+            password=self.admin_pw,
+            auto_bind=True
+        )
+        logger.info(f"✅ Connected to LDAP: {self.host}:{self.port}")
     
-    return '\n\n'.join(ldif_lines)
-
-
-def backup_ldap(config: Dict[str, Any]) -> Path:
-    """Бэкап текущей LDAP БД."""
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    backup_path = Path(config['ldap']['config_dir']) / f"backup_{timestamp}"
+    def disconnect(self):
+        """Отключение от LDAP."""
+        if self.conn:
+            self.conn.unbind()
     
-    subprocess.run([
-        'slapcat', '-n', '0', '-l', str(backup_path.with_suffix('.ldif'))
-    ], check=True)
+    def initialize_structure(self):
+        """Создать OU=users если не существует."""
+        self.connect()
+        try:
+            ou_dn = f"ou=users,{self.base_dn}"
+            
+            # Проверяем существование
+            self.conn.search(ou_dn, '(objectClass=*)', search_scope='BASE')
+            if self.conn.entries:
+                logger.info("OU=users already exists")
+                return
+            
+            # Создаем OU
+            self.conn.add(
+                ou_dn,
+                ['organizationalUnit'],
+                {
+                    'ou': 'users',
+                    'description': 'Unifi Identity Users'
+                }
+            )
+            
+            if self.conn.result['result'] == 0:
+                logger.info(f"✅ Created OU: {ou_dn}")
+            else:
+                logger.warning(f"Failed to create OU: {self.conn.result}")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize LDAP structure: {e}")
+            raise
+        finally:
+            self.disconnect()
     
-    logger.info(f"Backup created: {backup_path}.ldif")
-    return backup_path
-
-def sync_users_to_ldap(users: List[Dict[str, Any]], config: Dict[str, Any]):
-    """Полная синхронизация: LDIF → slapadd."""
-    base_dn = config['ldap']['base_dn']
-    ldif_path = Path(config['ldap']['ldif_path'])
+    def get_existing_users(self) -> set:
+        """Получить UID существующих пользователей."""
+        try:
+            self.conn.search(
+                f"ou=users,{self.base_dn}",
+                '(objectClass=inetOrgPerson)',
+                search_scope=SUBTREE,
+                attributes=['uid']
+            )
+            return {entry.uid.value for entry in self.conn.entries if hasattr(entry, 'uid')}
+        except Exception as e:
+            logger.warning(f"Error getting existing users: {e}")
+            return set()
     
-    # 1. Трансформация
-    ldif_content = transform_users_to_ldif(users, base_dn)
-    logger.info(f"Transformed {len(users)} users to LDIF")
-    
-    # 2. Бэкап
-    backup_path = backup_ldap(config)
-    
-    # 3. Запись временного LDIF
-    temp_ldif = ldif_path.with_suffix('.tmp')
-    temp_ldif.write_text(ldif_content)
-    
-    try:
-        cmd = [
-            'ldapmodify',
-            '-x', '-D', 'cn=admin,dc=navalny,dc=com',
-            '-y', pw_file.name,  # Пароль из файла!
-            '-f', str(temp_ldif),
-            '-c'  # Continue
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        
-        if result.returncode == 0 or result.returncode == 68:  # 68=some changes skipped OK
-            logger.info("✅ LDAP modified successfully!")
-        else:
-            logger.error(f"ldapmodify failed: {result.stderr}")
-            raise subprocess.CalledProcessError(result.returncode, cmd)
-    
-    finally:
-        temp_ldif.unlink(missing_ok=True)
+    def sync_users(self, users: List[Dict[str, Any]]):
+        """Синхронизация списка пользователей."""
+        self.connect()
+        try:
+            existing = self.get_existing_users()
+            added = 0
+            updated = 0
+            errors = 0
+            
+            for user in users:
+                uid = user['id']
+                profile = user.get('profile', {})
+                
+                email = profile.get('email', f'user_{uid[:8]}@fallback.com')
+                firstname = profile.get('first_name', 'Unknown')
+                lastname = profile.get('last_name', 'User')
+                cn = f"{firstname} {lastname}".strip()
+                
+                dn = f"uid={uid},ou=users,{self.base_dn}"
+                
+                attrs = {
+                    'cn': cn,
+                    'sn': lastname,
+                    'givenName': firstname,
+                    'mail': email,
+                    'uid': uid
+                }
+                
+                # Добавить телефон если есть
+                phone = f"{profile.get('area_code', '')}{profile.get('mobile_phone', '')}".strip()
+                if phone:
+                    attrs['telephoneNumber'] = phone
+                
+                if uid in existing:
+                    # Обновление существующего
+                    try:
+                        changes = {k: [(MODIFY_REPLACE, [v])] for k, v in attrs.items()}
+                        self.conn.modify(dn, changes)
+                        
+                        if self.conn.result['result'] == 0:
+                            logger.debug(f"Updated: {email}")
+                            updated += 1
+                        else:
+                            logger.warning(f"Update failed {email}: {self.conn.result}")
+                            errors += 1
+                    except Exception as e:
+                        logger.warning(f"Update exception {email}: {e}")
+                        errors += 1
+                else:
+                    # Создание нового
+                    try:
+                        self.conn.add(
+                            dn,
+                            ['inetOrgPerson'],
+                            attrs
+                        )
+                        
+                        if self.conn.result['result'] == 0:
+                            logger.info(f"✅ Added: {email}")
+                            added += 1
+                        else:
+                            logger.warning(f"Add failed {email}: {self.conn.result}")
+                            errors += 1
+                    except Exception as e:
+                        logger.warning(f"Add exception {email}: {e}")
+                        errors += 1
+            
+            logger.info(f"🔄 Sync completed: {added} added, {updated} updated, {errors} errors")
+        finally:
+            self.disconnect()

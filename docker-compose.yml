@@ -1,45 +1,54 @@
 version: '3.8'
 
-
 services:
-  unifi-ldap-sync:
-    build: .
-    container_name: unifi-ldap-sync
+  openldap:
+    image: osixia/openldap:1.5.0
+    container_name: openldap
     restart: unless-stopped
-    
+    environment:
+      LDAP_ORGANISATION: "${LDAP_ORGANISATION}"
+      LDAP_DOMAIN: "${LDAP_DOMAIN}"
+      LDAP_ADMIN_PASSWORD: "${LDAP_ADMIN_PASSWORD}"
+      LDAP_CONFIG_PASSWORD: "${LDAP_CONFIG_PASSWORD}"
+      LDAP_READONLY_USER: "false"
+      LDAP_RFC2307BIS_SCHEMA: "false"
+      LDAP_BACKEND: "mdb"
+      LDAP_TLS: "false"
+      LDAP_LOG_LEVEL: "256"
     ports:
-      - "389:389"   # LDAP
-      - "636:636"   # LDAPS
-    
+      - "389:389"
+      - "636:636"
     volumes:
       - ldap_data:/var/lib/ldap
       - ldap_config:/etc/ldap/slapd.d
-      - ./secrets:/run/secrets:ro  # Локальная папка secrets/
-    
-    environment:
-      - UNIFI_DOMAIN=${UNIFI_DOMAIN}
-      - SITE_NAME=${SITE_NAME}
-      - LDAP_BASE_DN=${LDAP_BASE_DN}
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-    
-#    secrets:
-#      - unifi_token
-#      - ldap_rootpw
-
-    
     healthcheck:
-      test: ["CMD-SHELL", "ldapsearch -x -H ldap://localhost -b '${LDAP_BASE_DN}' -s base || exit 1"]
-      interval: 30s
-      timeout: 10s
+      test: ["CMD-SHELL", "ldapsearch -x -H ldap://localhost -b '' -s base '(objectClass=*)' namingContexts || exit 1"]
+      interval: 10s
+      timeout: 5s
       retries: 5
-      start_period: 60s
+      start_period: 30s
+
+  unifi-sync:
+    build: .
+    container_name: unifi-sync
+    restart: unless-stopped
+    depends_on:
+      openldap:
+        condition: service_healthy
+    environment:
+      UNIFI_DOMAIN: "${UNIFI_DOMAIN}"
+      UNIFI_TOKEN_FILE: "/run/secrets/unifi_token"
+      SITE_NAME: "${SITE_NAME}"
+      LDAP_HOST: "openldap"
+      LDAP_PORT: "389"
+      LDAP_BASE_DN: "${LDAP_BASE_DN}"
+      LDAP_ADMIN_DN: "${LDAP_ADMIN_DN}"
+      LDAP_ADMIN_PASSWORD: "${LDAP_ADMIN_PASSWORD}"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+      SYNC_INTERVAL: "${SYNC_INTERVAL:-300}"
+    volumes:
+      - ./secrets:/run/secrets:ro
 
 volumes:
   ldap_data:
   ldap_config:
-
-#secrets:
-#  unifi_token:
-#    external: true # или .file /secrets для локального
-#  ldap_rootpw:
-#    external: true  # docker secret create ldap_rootpw secrets/ldap_rootpw.txt
